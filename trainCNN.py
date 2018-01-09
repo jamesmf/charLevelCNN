@@ -4,7 +4,9 @@ Created on Mon Nov 13 19:56:26 2017
 
 @author: jmf
 """
-
+from keras.layers import Input, Dense, Conv1D, Embedding,
+from keras.layers import GlobalMaxPooling1D, Dot
+from keras.models import Model
 import numpy as np
 import os
 
@@ -13,11 +15,14 @@ def cos(vector, mat):
     n2 = np.linalg.norm(mat, axis=1)
     dot = mat.dot(vector.T)
     d = np.divide(dot, n1)
-    d = np.divide(d, n2.reshape(-1,1))
+    try:
+        d = np.divide(d, n2)
+    except ValueError:
+        d = np.divide(d, n2.reshape(-1,1))
     return d
 
 
-def readWordVecs(fname="../recipeRNN/data/glove.6B.100d.txt", style="glove"):
+def readWordVecs(fname="data/ft_100k.txt", style="glove"):
     """
     Reads in a flat file of word vectors and returns a numpy array and a list
     of words. Also creates a list of the letters contained in those words.
@@ -26,6 +31,7 @@ def readWordVecs(fname="../recipeRNN/data/glove.6B.100d.txt", style="glove"):
     """
     words = []
     letters = set()
+    vecLen = 0
     # iterate over input file to see how many legal words we have
     with open(fname, "rb") as f:
         for line in f:
@@ -33,13 +39,15 @@ def readWordVecs(fname="../recipeRNN/data/glove.6B.100d.txt", style="glove"):
                 line = line.decode("UTF-8").encode('ASCII')
                 word = line[:line.find(' ')]
                 words.append(word)
+                if vecLen == 0:
+                    vecLen = len(line.split(' ')) - 2
                 letters = set(letters)|set(word)
             except UnicodeError:
                 pass
     n = len(words)
     print("read in "+str(n)+" words")
     # define an array of the appropriate size
-    out = np.zeros((n, 100))
+    out = np.zeros((n, vecLen))
     ind = 0
     with open(fname, "rb") as f:
         for line in f:
@@ -52,7 +60,9 @@ def readWordVecs(fname="../recipeRNN/data/glove.6B.100d.txt", style="glove"):
                     print(ind)
             except UnicodeError:
                 pass
-    return out, words, sorted(letters)
+    letters = sorted(letters)
+    lettersDict = {k: letters.index(k)+1 for k in letters}
+    return out, words, lettersDict
 
 
 def getTopN(mat, k=10, chunksize=200):
@@ -94,6 +104,16 @@ def splitInds(words, train=0.8, val=0.1, test=0.1):
     return train, val, test
 
 
+def getWordRep(word, letters, maxCharLen):
+    out = np.zeros((1, maxCharLen))
+    maxStart = max(0, maxCharLen - len(word))
+    start = np.random.randint(0, maxStart+1)
+    for i in range(0, len(word)):
+        if word[i] in letters:
+            out[0, start+i] = letters[word[i]]
+    return out
+
+
 def createExamples(mat, topN, indsSplit, indsAll, words, letters,
                    randToPosRatio, style="vec", maxCharLen=20):
     """
@@ -123,19 +143,49 @@ def createExamples(mat, topN, indsSplit, indsAll, words, letters,
         vec1 = mat[posInd]
         vec2 = mat[wordInd]
         c = cos(vec1, vec2.reshape(-1,1).T)
+        wordRep = getWordRep(words[wordInd], letters, maxCharLen)
         X1[outIndex] = vec1
-        X2[outIndex] = vec2
+        X2[outIndex] = wordRep
+        
         y[outIndex] = c
         outIndex += 1
         negInds = [int(i) for i in np.random.choice(indsAll,
                                                     size=randToPosRatio)]
         vecNeg = mat[negInds]
-        cRand = cos(vec2, vecNeg.T)
+#        print(words[wordInd], [words[int(i)] for i in negInds])
+        cRand = cos(vec2, vecNeg)
+#        print(cRand.shape, cRand)
         X1[outIndex:outIndex+randToPosRatio] = vecNeg
-        
-        
-        
+        for j in range(0, randToPosRatio):
+            X2[outIndex+j] = getWordRep(words[wordInd], letters, maxCharLen)
+        y[outIndex: outIndex+randToPosRatio] = cRand
+    return X1, X2, y
 
+
+def defineModel(letters, maxCharLen, vecLen):
+    sharedSize = 128
+    charInp = Input(shape=(20,))
+    vecInp = Input(shape=(vecLen,))
+    
+    # character embedding
+    char = Embedding(len(letters)+1, 10)(charInp)
+    char = Conv1D(32, 3, padding="same", dilation_rate=1,
+                  activation='relu')(char)
+    char = Conv1D(64, 3, padding="same", dilation_rate=2,
+                  activation='relu')(char)
+    char = Conv1D(sharedSize, 3, padding="same", dilation_rate=4,
+                  activation='relu')(char)
+    char = GlobalMaxPooling1D()(char)
+
+    # vector representation
+    d = Dense(sharedSize, activation='tanh')(vecInp)
+    
+    # merge
+    dot = Dot(1, normalize=True)([char, d])
+    
+    model = Model([vecInp, charInp], dot)
+    model.compile('adam', 'mean_squared_error')
+    return model
 
 k = 10 # top k most similar words are considered "positives" in ratio below
 randToPosRatio = 2 # for every word taken from top-k, this many random samples
@@ -144,3 +194,8 @@ randToPosRatio = 2 # for every word taken from top-k, this many random samples
 mat, words, letters = readWordVecs()
 topN = getTopN(mat, k=k)
 train, val, test = splitInds(words)
+
+X1val, X2val, yval = createExamples(mat, topN, val, range(0,len(words)), words,
+                                    letters, 2)
+X1test, X2test, ytest = createExamples(mat, topN, test, range(0,len(words)),
+                                    words, letters, 2)
