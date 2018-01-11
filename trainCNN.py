@@ -4,9 +4,10 @@ Created on Mon Nov 13 19:56:26 2017
 
 @author: jmf
 """
-from keras.layers import Input, Dense, Conv1D, Embedding,
+from keras.layers import Input, Dense, Conv1D, Embedding
 from keras.layers import GlobalMaxPooling1D, Dot
-from keras.models import Model
+from keras.models import Model, load_model
+from keras.callbacks import EarlyStopping, TensorBoard, ModelCheckpoint
 import numpy as np
 import os
 
@@ -111,6 +112,8 @@ def getWordRep(word, letters, maxCharLen):
     for i in range(0, len(word)):
         if word[i] in letters:
             out[0, start+i] = letters[word[i]]
+        if (start+i+1) == maxCharLen:
+            break
     return out
 
 
@@ -147,7 +150,8 @@ def createExamples(mat, topN, indsSplit, indsAll, words, letters,
         X1[outIndex] = vec1
         X2[outIndex] = wordRep
         
-        y[outIndex] = c
+#        y[outIndex] = c
+        y[outIndex] = 1
         outIndex += 1
         negInds = [int(i) for i in np.random.choice(indsAll,
                                                     size=randToPosRatio)]
@@ -158,13 +162,29 @@ def createExamples(mat, topN, indsSplit, indsAll, words, letters,
         X1[outIndex:outIndex+randToPosRatio] = vecNeg
         for j in range(0, randToPosRatio):
             X2[outIndex+j] = getWordRep(words[wordInd], letters, maxCharLen)
-        y[outIndex: outIndex+randToPosRatio] = cRand
+#        y[outIndex: outIndex+randToPosRatio] = cRand
+        outIndex += randToPosRatio
+
     return X1, X2, y
 
 
+def exampleGen(*args, **kwargs):
+    batchSize = 32
+    while True:
+        X1, X2, y = createExamples(*args, **kwargs)
+        inds = np.arange(0, X1.shape[0])
+        np.random.shuffle(inds)
+        ind = 0
+        while ind < X1.shape[0]:
+            indSlice = inds[ind:ind+batchSize]
+            yield ([X1[indSlice],
+                   X2[indSlice]], y[indSlice])
+            ind += batchSize
+    
+
 def defineModel(letters, maxCharLen, vecLen):
     sharedSize = 128
-    charInp = Input(shape=(20,))
+    charInp = Input(shape=(maxCharLen,))
     vecInp = Input(shape=(vecLen,))
     
     # character embedding
@@ -182,20 +202,38 @@ def defineModel(letters, maxCharLen, vecLen):
     
     # merge
     dot = Dot(1, normalize=True)([char, d])
+    dot = Dense(1, activation='sigmoid')(dot)
     
     model = Model([vecInp, charInp], dot)
-    model.compile('adam', 'mean_squared_error')
+    model.compile('adam', 'binary_crossentropy')
     return model
 
-k = 10 # top k most similar words are considered "positives" in ratio below
-randToPosRatio = 2 # for every word taken from top-k, this many random samples
-
+k = 10 #  top k most similar words are considered "positives" in ratio below
+randToPosRatio = 2 #  for every word taken from top-k, this many random samples
+maxCharLen = 20 #  maximum word length we'll allow
 
 mat, words, letters = readWordVecs()
 topN = getTopN(mat, k=k)
 train, val, test = splitInds(words)
 
-X1val, X2val, yval = createExamples(mat, topN, val, range(0,len(words)), words,
+stepsPer = len(train)/32
+allInds = np.arange(0, len(words))
+X1val, X2val, yval = createExamples(mat, topN, val, allInds, words,
                                     letters, 2)
-X1test, X2test, ytest = createExamples(mat, topN, test, range(0,len(words)),
+X1test, X2test, ytest = createExamples(mat, topN, test, allInds,
                                     words, letters, 2)
+
+callbacks = [
+    EarlyStopping(patience=3),
+    ModelCheckpoint(filepath='models/charLevel.cnn', verbose=1,
+                    save_best_only=True),
+    TensorBoard() #  not all of the options work w/ TB+keras
+]
+
+model = defineModel(letters, maxCharLen, X1val.shape[1])
+model.fit_generator(exampleGen(mat, topN, train, allInds, words,
+                                   letters, 2),
+                    steps_per_epoch=stepsPer,
+                    epochs=100,
+                    callbacks=callbacks,
+                    validation_data=([X1val, X2val],[yval]))
