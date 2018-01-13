@@ -6,7 +6,7 @@ Word-level embeddings are extremely common, and large organizations have release
 
 But if instead you want to train a character-level model, pretraining isn't as easy.
 
-This repository attemps to solve that problem by using pretrained word embeddings as input to train a shallow character-level CNN that can then for the bottom layers of a deeper model.
+This repository attemps to solve that problem by using pretrained word embeddings as input to train a shallow character-level CNN that can then be used as the bottom layers of a deeper model.
 
 The model takes pairs of (word_vector_i, character_representation_j) from the w2v/ft/glove .vec file and predicts cosine similarity between words `i` and `j`.
 
@@ -16,7 +16,7 @@ With a 4-layer CNN architecture, a maximum word length of 20 characters, and a n
 So without seeing more than just the words in the .vec file, we already have a decent character-level embedder:
 
 ```
-# concedes is in the test set, never seen by the model
+# 'concedes' is in the test set, never seen by the model
 checkScore("acknowledges", "concedes", letters, words, maxCharLen)
 >0.898567
 
@@ -41,7 +41,7 @@ The model is far from perfect, but could provide a great jump-start to char-leve
 
 ## Requirements
 
-The repo requires a little more work to be conveniently repurposable, but it would work with a .vec file saved in `data/` and referenced in the readWordVecs function.
+The repo requires a little more work to be conveniently repurposable, but it would work with a .vec file saved in `data/` and referenced in the `readWordVecs()` function.
 
 Tested with:
 ```
