@@ -1,5 +1,5 @@
 # charLevelCNN
-Pretraining method for character-level CNNs
+Pretraining method for character-level CNNs - converts word embeddings to character level embeddings
 
 ## Methodology
 Word-level embeddings are extremely common, and large organizations have released `.vec` files trained using Word2Vec/fasttext/GloVe on enormous datasets (like Common Crawl). This makes it easy to pre-seed a word-level model with reasonable word embeddings without needing the time or resources to train on a dataset of that size yourself.
