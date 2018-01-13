@@ -48,3 +48,5 @@ Tested with:
 keras=2.0.8
 numpy=1.13.3
 ```
+
+![PCA'd embedding of characters](https://user-images.githubusercontent.com/7809188/34907997-9229e8b4-f856-11e7-87e4-549cc8effb8a.png)
