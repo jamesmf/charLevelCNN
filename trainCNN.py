@@ -5,11 +5,12 @@ Created on Mon Nov 13 19:56:26 2017
 @author: jmf
 """
 from keras.layers import Input, Dense, Conv1D, Embedding
-from keras.layers import GlobalMaxPooling1D, Dot
+from keras.layers import GlobalMaxPooling1D, Dot, Dropout
 from keras.models import Model, load_model
 from keras.callbacks import EarlyStopping, TensorBoard, ModelCheckpoint
 import numpy as np
 import os
+import pickle
 
 def cos(vector, mat):
     n1 = np.linalg.norm(vector)
@@ -180,7 +181,19 @@ def exampleGen(*args, **kwargs):
             yield ([X1[indSlice],
                    X2[indSlice]], y[indSlice])
             ind += batchSize
-    
+
+
+def checkScore(word, chars, letters, words, maxCharLen):
+    numToCheck = 20
+    x1 = []
+    x2 = []
+    for i in range(0, numToCheck):
+        x1.append(mat[words.index(word)])
+        x2.append(getWordRep(chars, letters, maxCharLen))
+    x1 = np.array(x1).reshape(numToCheck,-1)
+    x2 = np.array(x2).reshape(numToCheck,-1)
+    p = model.predict([x1, x2])
+    print(np.mean(p))
 
 def defineModel(letters, maxCharLen, vecLen):
     sharedSize = 128
@@ -195,7 +208,10 @@ def defineModel(letters, maxCharLen, vecLen):
                   activation='relu')(char)
     char = Conv1D(sharedSize, 3, padding="same", dilation_rate=4,
                   activation='relu')(char)
+    char = Conv1D(sharedSize, 3, padding="same", dilation_rate=8,
+                  activation='relu')(char)
     char = GlobalMaxPooling1D()(char)
+    char = Dropout(0.5)(char)
 
     # vector representation
     d = Dense(sharedSize, activation='tanh')(vecInp)
@@ -209,22 +225,22 @@ def defineModel(letters, maxCharLen, vecLen):
     return model
 
 k = 10 #  top k most similar words are considered "positives" in ratio below
-randToPosRatio = 2 #  for every word taken from top-k, this many random samples
+randToPosRatio = 4 #  for every word taken from top-k, this many random samples
 maxCharLen = 20 #  maximum word length we'll allow
 
 mat, words, letters = readWordVecs()
 topN = getTopN(mat, k=k)
 train, val, test = splitInds(words)
 
-stepsPer = len(train)/32
+stepsPer = len(train)*(1+randToPosRatio)/32
 allInds = np.arange(0, len(words))
 X1val, X2val, yval = createExamples(mat, topN, val, allInds, words,
-                                    letters, 2)
+                                    letters, randToPosRatio)
 X1test, X2test, ytest = createExamples(mat, topN, test, allInds,
-                                    words, letters, 2)
+                                    words, letters, randToPosRatio)
 
 callbacks = [
-    EarlyStopping(patience=3),
+    EarlyStopping(patience=8),
     ModelCheckpoint(filepath='models/charLevel.cnn', verbose=1,
                     save_best_only=True),
     TensorBoard() #  not all of the options work w/ TB+keras
@@ -232,8 +248,10 @@ callbacks = [
 
 model = defineModel(letters, maxCharLen, X1val.shape[1])
 model.fit_generator(exampleGen(mat, topN, train, allInds, words,
-                                   letters, 2),
+                                   letters, randToPosRatio),
                     steps_per_epoch=stepsPer,
                     epochs=100,
                     callbacks=callbacks,
                     validation_data=([X1val, X2val],[yval]))
+with open("models/letters.pkl", 'wb') as f:
+    pickle.dump(letters, f)
