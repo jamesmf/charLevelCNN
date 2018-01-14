@@ -195,6 +195,7 @@ def checkScore(word, chars, letters, words, maxCharLen):
     p = model.predict([x1, x2])
     print(np.mean(p))
 
+
 def defineModel(letters, maxCharLen, vecLen):
     sharedSize = 128
     charInp = Input(shape=(maxCharLen,))

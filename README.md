@@ -39,6 +39,28 @@ checkScore("acknowledges", "dog", letters, words, maxCharLen)
 
 The model is far from perfect, but could provide a great jump-start to char-level models trained on non-web-scale datasets.
 
+## Experiments
+
+Tested the performance of a pretrained model on the AG news dataset (4-class headline+snippet categorization), available here: 
+https://github.com/mhjabreel/CharCNN/tree/master/data/ag_news_csv
+
+Caveats:
+- only tried one simple architecture
+- no optimization of the pre-trained bottom layers
+- .vec file used in pretraining was all lower-cased
+
+Results:
+- without pretraining error rate: 13%
+- with pretraining error rate: 17% (worse than without pretraining)
+- without pretraining, we need a much lower learning rate for the model to converge
+
+![to_train_or_not_to_pretrain_that_is_the_question](https://user-images.githubusercontent.com/7809188/34919946-c7a4951a-f938-11e7-9b66-c3df6d1ad312.png)
+
+Hypotheses:
+- if the vocabulary of the news dataset is limited, then much of the pretrained information is 'wasted.'
+- without pretraining, any number of layers can model words, whereas with a pretrained model, you start with 4 layers devoted to just single-word embedding
+- possibility of dead neurons
+
 ## Requirements
 
 The repo requires a little more work to be conveniently repurposable, but it would work with a .vec file saved in `data/` and referenced in the `readWordVecs()` function.
