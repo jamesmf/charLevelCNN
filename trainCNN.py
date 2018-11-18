@@ -4,15 +4,16 @@ Created on Mon Nov 13 19:56:26 2017
 
 @author: jmf
 """
-from keras.layers import Input, Dense, Conv1D, Embedding
+from keras.layers import Input, Dense, Conv1D, Embedding, SpatialDropout1D
 from keras.layers import GlobalMaxPooling1D, Dot, Dropout, Flatten
 from keras.regularizers import l1_l2
+from keras.optimizers import Adam
 from keras.models import Model, load_model
 from keras.callbacks import EarlyStopping, TensorBoard, ModelCheckpoint
 import numpy as np
 import os
 import pickle
-from gensim.models import KeyedVectors
+from gensim.models import KeyedVectors, FastText
 
 
 def read_word_vecs(fname="models/ag_w2v_gensim"):
@@ -21,7 +22,10 @@ def read_word_vecs(fname="models/ag_w2v_gensim"):
     to convert between formats, so we can put them all in the w2v format, which
     can then be loaded with KeyedVectors
     """
-    model = KeyedVectors.load_word2vec_format(fname, binary=False)
+    if fname.find("fasttext") > -1:
+        model = FastText.load_fasttext_format(fname).wv
+    else:
+        model = KeyedVectors.load_word2vec_format(fname, binary=False)
     words = sorted(list(model.vocab.keys()))
     letters = set(['a'])
     for w in words:
@@ -32,22 +36,19 @@ def read_word_vecs(fname="models/ag_w2v_gensim"):
     return model, words, lettersDict
 
 
-def split_inds(words, train=0.8, val=0.1, test=0.1):
+def split_inds(words, train=0.9):
     """
-    Random train/val/test split of the words
+    Random train/val split of the words
     """
     l = len(words)
     r = np.arange(l)
     np.random.shuffle(r)
     trainInd = int(l*train)
-    valInd = int(int(l*train)+l*val)
     train = r[:trainInd]
-    val = r[trainInd:valInd]
-    test = r[valInd:]
+    val = r[trainInd:]
     train = [words[i] for i in train]
     val = [words[i] for i in val]
-    test = [words[i] for i in test]
-    return train, val, test
+    return train, val
 
 
 def get_char_level_rep(word, letters, max_char_len):
@@ -118,7 +119,7 @@ def create_examples(model, w1_words, w2_words, letters, max_char_len,
 
         # sample some similar words
         most_sim = model.most_similar(w, topn=100*ex_per)
-        most_sim = [i for i in most_sim if i[0] in w2_set]
+        most_sim = [i for i in most_sim if i[0] in w2_set][:5]
 
         sim_range = np.arange(0, len(most_sim))
         sim_w = np.random.choice(sim_range, size=sim_examples_per_w)
@@ -154,19 +155,18 @@ def example_gen(*args, **kwargs):
             ind += batchSize
 
 
-def get_model_layers(inps, embedding_size):
+def get_model_layers(inps, embedding_size, l1=0, l2=0.0001):
     layers = []
     layers.append(Embedding(len(letters)+1, embedding_size))
-    layers.append(Conv1D(64, 3, dilation_rate=1, activation='relu',
-                         activity_regularizer=l1_l2(0.05, 0.05)))
-    layers.append(Conv1D(128, 3, dilation_rate=2, activation='relu',
-                         activity_regularizer=l1_l2(0.05, 0.05)))
-    layers.append(Dropout(0.1))
     layers.append(Conv1D(128, 3, dilation_rate=1, activation='relu',
-                         activity_regularizer=l1_l2(0.05, 0.05)))
-    layers.append(Conv1D(128, 3, dilation_rate=2, activation='relu',
-                         activity_regularizer=l1_l2(0.05, 0.05)))
-    layers.append(Dropout(0.1))
+                         activity_regularizer=l1_l2(l1, l2)))
+    layers.append(Conv1D(256, 3, dilation_rate=2, activation='relu',
+                         activity_regularizer=l1_l2(l1, l2)))
+    layers.append(SpatialDropout1D(0.25))
+    layers.append(Conv1D(256, 3, dilation_rate=1, activation='relu',
+                         activity_regularizer=l1_l2(l1, l2)))
+    layers.append(Conv1D(512, 3, dilation_rate=2, activation='relu'))
+    layers.append(SpatialDropout1D(0.1))
 
     for layer in layers:
         for n, side in enumerate(inps):
@@ -175,7 +175,7 @@ def get_model_layers(inps, embedding_size):
 
 
 def define_model(letters, max_char_len):
-    shared_size = 128
+    shared_size = 512
     char_inp_left = Input(shape=(max_char_len,))
     char_inp_right = Input(shape=(max_char_len,))
     inps = [char_inp_left, char_inp_right]
@@ -190,24 +190,24 @@ def define_model(letters, max_char_len):
     right = shared_dense(right)
     
     # merge
-    dot = Dot(1, normalize=True)([left, right])
+    dot = Dot(-1, normalize=False)([left, right])
     
     model = Model([char_inp_left, char_inp_right], dot)
-    model.compile('adam', 'mse')
-    return model
+    model.compile(Adam(lr=0.00005), 'mse')
+    checker = Model([char_inp_left, char_inp_right], [left, right])
+    checker.compile('adam', 'mse')
+    return model, checker
 
 
 max_char_len = 20 #  maximum word length we'll allow
 
 word_model, words, letters = read_word_vecs()
 
-train, val, test = split_inds(words)
+train, val = split_inds(words)
 
-steps_per = len(train)/16
+steps_per = len(train)/8
 w2_words = train+val
 Xval, yval = create_examples(word_model, val, w2_words, letters, max_char_len)
-w2_words += test
-Xtest, ytest = create_examples(word_model, test, w2_words, letters, max_char_len)
 
 callbacks = [
     EarlyStopping(patience=16),
@@ -216,7 +216,7 @@ callbacks = [
     TensorBoard() #  not all of the options work w/ TB+keras
 ]
 
-model = define_model(letters, max_char_len)
+model, checker = define_model(letters, max_char_len)
 model.fit_generator(example_gen(word_model, train, train, letters, max_char_len),
                     steps_per_epoch=steps_per,
                     epochs=100,
