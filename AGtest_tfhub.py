@@ -133,7 +133,17 @@ def init_tfmod(name):
     return text_input, embedded_text, session
 
 
-
+def compute_masked_X2(X2, perc):
+    """
+    
+    """
+    num_ex = X2.shape[0]
+    out = np.zeros_like(X2)
+    p = np.random.rand(num_ex)
+    for ind in range(0, num_ex):
+        if p[ind] > perc:
+            out[ind] = X2[ind]
+    return out
 
 logDir = "logs/no_prep"
 modelname = "tfhub_AG.cnn"
@@ -157,27 +167,29 @@ X, X2, y = shuffle(X, X2, y)
 val_len = int(0.15*X.shape[0])
 Xtrain = X[val_len:]
 X2train = X2[val_len:]
+print(np.mean(X2train))
 ytrain = y[val_len:]
 Xval = X[:val_len]
 X2val = X2[:val_len]
 yval = y[:val_len]
 Xtest, ytest, _ = getData("data/demo_AG/test.csv", maxCharLen, tfhub_parts,
                           letters=lettersNew)
+Xtest = Xtest[0], np.zeros_like(Xtest[1])
 
 model = defineModel(maxCharLen, lettersNew, mergeType=None)
 dropoutInc = cloneEvery*0.8/numEpochs  # how much dropout to add to the tfhub side
 dropoutInc = 0.1
+dropout_val = 0.
+
+# the validation data should assume we dont' have tfhub input
+X2val = np.zeros_like(X2val)
 for ep in range(0, numEpochs):
-    model.fit([Xtrain, X2train], ytrain, epochs=1, callbacks=callbacks,
-              validation_data=([Xval, X2val], yval))
+    masked_X2train = compute_masked_X2(X2train, dropout_val)
+    print(np.mean(masked_X2train))
+    model.fit([Xtrain, masked_X2train], ytrain, epochs=1, callbacks=callbacks,
+              validation_data=([Xval, X2val], yval), shuffle=True)
     if ep % cloneEvery == 0:
-        newrate = np.max((model.get_layer('dropout_tf').rate, 1))
-        model.get_layer('dropout_tf').rate = newrate
-        model = clone_model(model)
-        rms = Nadam(lr=0.0005)
-        model.compile(optimizer=rms, loss='categorical_crossentropy',
-                  metrics=['accuracy'])
-        print(model.get_layer('dropout_tf').rate)
+        dropout_val += dropoutInc
 
 model = load_model(modelname)
 p = model.predict(Xtest)
